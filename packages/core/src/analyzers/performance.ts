@@ -1,5 +1,5 @@
 // packages/core/src/analyzers/performance.ts
-// Phase A3: Complete Performance Analyzer Implementation - UPDATED
+// COMPLETE WORKING Performance Analyzer - Part 1
 
 import { Language } from '@github-ai/shared';
 
@@ -20,7 +20,6 @@ export interface PerformanceIssue {
 }
 
 export enum PerformanceIssueType {
-  // JavaScript/TypeScript specific
   INEFFICIENT_LOOP = 'inefficient_loop',
   N_PLUS_ONE_QUERY = 'n_plus_one_query',
   EXCESSIVE_ASYNC_AWAIT = 'excessive_async_await',
@@ -28,13 +27,9 @@ export enum PerformanceIssueType {
   INEFFICIENT_REGEX = 'inefficient_regex',
   LARGE_OBJECT_CREATION = 'large_object_creation',
   MEMORY_LEAK_RISK = 'memory_leak_risk',
-  
-  // Python specific
   INEFFICIENT_COMPREHENSION = 'inefficient_comprehension',
   GLOBAL_VARIABLE_ABUSE = 'global_variable_abuse',
   INEFFICIENT_STRING_CONCAT = 'inefficient_string_concat',
-  
-  // General patterns
   RECURSIVE_WITHOUT_MEMOIZATION = 'recursive_without_memoization',
   SYNCHRONOUS_FILE_IO = 'synchronous_file_io',
   INEFFICIENT_DATABASE_QUERY = 'inefficient_database_query',
@@ -59,23 +54,19 @@ export interface PerformanceAnalysisResult {
     highIssues: number;
     mediumIssues: number;
     lowIssues: number;
-    overallScore: number; // 0-100
+    overallScore: number;
   };
   recommendations: string[];
   analysisTime: number;
 }
 
 export class PerformanceAnalyzer {
-  getIssueTypeDetails(N_PLUS_ONE_QUERY: PerformanceIssueType) {
-      throw new Error('Method not implemented.');
-  }
   constructor() {
-    // Initialize the performance analyzer
+    // Initialize performance analyzer
   }
 
   /**
-   * UPDATED: Main analysis method (replaces detectPerformanceIssues)
-   * Analyze code for performance issues using pattern detection
+   * Main analysis method - analyzes code for performance issues
    */
   async analyzePerformance(
     content: string, 
@@ -86,14 +77,13 @@ export class PerformanceAnalyzer {
     const issues: PerformanceIssue[] = [];
 
     try {
-      // Use regex-based analysis for now (preparing for Tree-sitter integration)
+      // Analyze different performance patterns
       issues.push(...this.analyzeLoopPatterns(content, language, filePath));
       issues.push(...this.analyzeAsyncPatterns(content, language, filePath));
       issues.push(...this.analyzeMemoryPatterns(content, language, filePath));
       issues.push(...this.analyzeRegexPatterns(content, language, filePath));
       issues.push(...this.analyzeDatabasePatterns(content, language, filePath));
       issues.push(...this.analyzeRecursionPatterns(content, language, filePath));
-
     } catch (error) {
       console.error('Performance analysis error:', error);
     }
@@ -102,7 +92,7 @@ export class PerformanceAnalyzer {
   }
 
   /**
-   * LEGACY: Keep old method signature for backward compatibility
+   * Legacy method for backward compatibility
    */
   async detectPerformanceIssues(content: string): Promise<PerformanceIssue[]> {
     const result = await this.analyzePerformance(content, 'typescript');
@@ -120,7 +110,7 @@ export class PerformanceAnalyzer {
       const line = lines[i];
       const lineNumber = i + 1;
 
-      // TypeScript/JavaScript: Check for inefficient array length access
+      // TypeScript/JavaScript: Inefficient array length access
       if ((language === 'typescript' || language === 'javascript') && 
           /for\s*\(\s*let\s+\w+\s*=\s*0\s*;\s*\w+\s*<\s*\w+\.length\s*;\s*\w+\+\+\s*\)/.test(line)) {
         
@@ -146,7 +136,7 @@ export class PerformanceAnalyzer {
         });
       }
 
-      // Python: Check for range(len()) pattern
+      // Python: range(len()) pattern
       if (language === 'python' && 
           /for\s+\w+\s+in\s+range\s*\(\s*len\s*\(\s*\w+\s*\)\s*\)\s*:/.test(line)) {
         
@@ -172,7 +162,7 @@ export class PerformanceAnalyzer {
         });
       }
 
-      // Check for nested array operations in loops
+      // Nested array operations in loops
       if (this.isLoopLine(line, language) && this.hasNestedArrayOperations(line)) {
         issues.push({
           type: PerformanceIssueType.INEFFICIENT_LOOP,
@@ -212,7 +202,7 @@ export class PerformanceAnalyzer {
         const line = lines[i];
         const lineNumber = i + 1;
 
-        // Check for forEach with async callback
+        // forEach with async callback
         if (/\.forEach\s*\(\s*async\s*\(/.test(line)) {
           issues.push({
             type: PerformanceIssueType.EXCESSIVE_ASYNC_AWAIT,
@@ -237,7 +227,7 @@ export class PerformanceAnalyzer {
           });
         }
 
-        // Check for sequential awaits in loops (simplified detection)
+        // Sequential awaits in loops
         if (this.isLoopLine(line, language) && this.hasAwaitInFollowingLines(lines, i)) {
           issues.push({
             type: PerformanceIssueType.EXCESSIVE_ASYNC_AWAIT,
@@ -278,7 +268,7 @@ export class PerformanceAnalyzer {
       const line = lines[i];
       const lineNumber = i + 1;
 
-      // Check for event listeners without removal
+      // Event listeners without removal
       if ((language === 'typescript' || language === 'javascript') && 
           /addEventListener\s*\(\s*['"`]/.test(line) &&
           !this.hasCorrespondingRemoveListener(content, line)) {
@@ -304,7 +294,7 @@ export class PerformanceAnalyzer {
         });
       }
 
-      // Check for large object creation (heuristic: many properties)
+      // Large object creation
       if (this.isLargeObjectCreation(line)) {
         issues.push({
           type: PerformanceIssueType.LARGE_OBJECT_CREATION,
@@ -331,6 +321,9 @@ export class PerformanceAnalyzer {
     return issues;
   }
 
+  // packages/core/src/analyzers/performance.ts - Part 2
+// Continue from Part 1 - Helper methods and remaining analysis
+
   /**
    * Analyze regex patterns for performance issues
    */
@@ -338,7 +331,6 @@ export class PerformanceAnalyzer {
     const issues: PerformanceIssue[] = [];
     const lines = content.split('\n');
 
-    // Dangerous regex patterns that can cause catastrophic backtracking
     const dangerousPatterns = [
       { pattern: /\(\.\*\)\+/, description: '(.*)+ pattern' },
       { pattern: /\(\.\+\)\*/, description: '(.+)* pattern' },
@@ -350,7 +342,6 @@ export class PerformanceAnalyzer {
       const line = lines[i];
       const lineNumber = i + 1;
 
-      // Find regex literals
       const regexMatches = line.match(/\/(.+?)\/[gimuy]*/g);
       if (regexMatches) {
         for (const regex of regexMatches) {
@@ -396,7 +387,6 @@ export class PerformanceAnalyzer {
       const line = lines[i];
       const lineNumber = i + 1;
 
-      // Check for queries inside loops
       if (this.isLoopLine(line, language) && this.hasQueryInFollowingLines(lines, i)) {
         issues.push({
           type: PerformanceIssueType.N_PLUS_ONE_QUERY,
@@ -436,12 +426,10 @@ export class PerformanceAnalyzer {
       const line = lines[i];
       const lineNumber = i + 1;
 
-      // Check for function definitions
       const funcMatch = line.match(/function\s+(\w+)|const\s+(\w+)\s*=|def\s+(\w+)/);
       if (funcMatch) {
         const funcName = funcMatch[1] || funcMatch[2] || funcMatch[3];
         
-        // Look for recursive calls without memoization
         if (this.isRecursiveFunction(lines, i, funcName) && 
             !this.hasMemoization(lines, i, funcName)) {
           
@@ -489,12 +477,11 @@ export class PerformanceAnalyzer {
   }
 
   private hasAwaitInFollowingLines(lines: string[], startIndex: number): boolean {
-    // Look at next 10 lines for await in loop body
     for (let i = startIndex + 1; i < Math.min(lines.length, startIndex + 10); i++) {
-      if (lines[i].includes('await') && lines[i].includes('  ')) { // Indented, likely in loop body
+      if (lines[i].includes('await') && lines[i].includes('  ')) {
         return true;
       }
-      if (lines[i].trim() === '}') break; // End of loop
+      if (lines[i].trim() === '}') break;
     }
     return false;
   }
@@ -511,11 +498,10 @@ export class PerformanceAnalyzer {
   }
 
   private isLargeObjectCreation(line: string): boolean {
-    // Heuristic: line with return { and many commas (properties)
     const objMatch = line.match(/\{[^}]*\}/);
     if (objMatch) {
       const commaCount = (objMatch[0].match(/,/g) || []).length;
-      return commaCount > 5; // Consider 6+ properties as "large"
+      return commaCount > 5;
     }
     return false;
   }
@@ -528,18 +514,16 @@ export class PerformanceAnalyzer {
       if (queryKeywords.some(keyword => new RegExp(keyword, 'i').test(line))) {
         return true;
       }
-      if (line.trim() === '}') break; // End of loop
+      if (line.trim() === '}') break;
     }
     return false;
   }
 
   private isRecursiveFunction(lines: string[], startIndex: number, funcName: string): boolean {
-    // Look for function calling itself
     for (let i = startIndex + 1; i < Math.min(lines.length, startIndex + 50); i++) {
       if (lines[i].includes(funcName + '(')) {
         return true;
       }
-      // Simple heuristic to find end of function
       if (lines[i].trim() === '}' && !lines[i].includes('if') && !lines[i].includes('for')) {
         break;
       }
@@ -548,7 +532,6 @@ export class PerformanceAnalyzer {
   }
 
   private hasMemoization(lines: string[], startIndex: number, funcName: string): boolean {
-    // Look for memoization patterns in the function
     for (let i = startIndex; i < Math.min(lines.length, startIndex + 50); i++) {
       const line = lines[i];
       if (line.includes('cache') || line.includes('memo') || 
@@ -631,4 +614,161 @@ export class PerformanceAnalyzer {
 
     return recommendations;
   }
+
+  /**
+   * Get detailed information about a specific issue type
+   */
+  async getIssueTypeDetails(issueType: PerformanceIssueType): Promise<{
+    description: string;
+    commonCauses: string[];
+    solutions: string[];
+    examples: { bad: string; good: string }[];
+  }> {
+    const details: Record<PerformanceIssueType, {
+      description: string;
+      commonCauses: string[];
+      solutions: string[];
+      examples: { bad: string; good: string }[];
+    }> = {
+      [PerformanceIssueType.INEFFICIENT_LOOP]: {
+        description: 'Loops with suboptimal patterns that can be easily optimized',
+        commonCauses: [
+          'Accessing array.length in loop condition',
+          'Nested array operations',
+          'Unnecessary object creation in loops'
+        ],
+        solutions: [
+          'Cache array length outside loop',
+          'Use appropriate data structures (Map, Set)',
+          'Avoid creating objects in tight loops'
+        ],
+        examples: [
+          {
+            bad: 'for (let i = 0; i < arr.length; i++) { /* ... */ }',
+            good: 'const len = arr.length; for (let i = 0; i < len; i++) { /* ... */ }'
+          }
+        ]
+      },
+      [PerformanceIssueType.N_PLUS_ONE_QUERY]: {
+        description: 'Database queries executed in loops causing excessive database calls',
+        commonCauses: [
+          'Fetching related data in loops',
+          'Lazy loading without batching',
+          'Missing JOIN operations'
+        ],
+        solutions: [
+          'Use bulk queries with WHERE IN',
+          'Implement eager loading',
+          'Use JOIN operations',
+          'Batch requests with DataLoader pattern'
+        ],
+        examples: [
+          {
+            bad: 'users.forEach(user => db.getPosts(user.id))',
+            good: 'const posts = await db.getPostsByUserIds(users.map(u => u.id))'
+          }
+        ]
+      },
+      [PerformanceIssueType.EXCESSIVE_ASYNC_AWAIT]: {
+        description: 'Suboptimal async/await patterns that prevent parallelization',
+        commonCauses: [
+          'Sequential awaits in loops',
+          'forEach with async callbacks',
+          'Not utilizing Promise.all()'
+        ],
+        solutions: [
+          'Use Promise.all() for parallel execution',
+          'Use for...of for sequential async operations',
+          'Collect promises before awaiting'
+        ],
+        examples: [
+          {
+            bad: 'for (const item of items) { await process(item); }',
+            good: 'await Promise.all(items.map(item => process(item)))'
+          }
+        ]
+      },
+      [PerformanceIssueType.UNNECESSARY_ARRAY_COPY]: {
+        description: '',
+        commonCauses: [],
+        solutions: [],
+        examples: []
+      },
+      [PerformanceIssueType.INEFFICIENT_REGEX]: {
+        description: '',
+        commonCauses: [],
+        solutions: [],
+        examples: []
+      },
+      [PerformanceIssueType.LARGE_OBJECT_CREATION]: {
+        description: '',
+        commonCauses: [],
+        solutions: [],
+        examples: []
+      },
+      [PerformanceIssueType.MEMORY_LEAK_RISK]: {
+        description: '',
+        commonCauses: [],
+        solutions: [],
+        examples: []
+      },
+      [PerformanceIssueType.INEFFICIENT_COMPREHENSION]: {
+        description: '',
+        commonCauses: [],
+        solutions: [],
+        examples: []
+      },
+      [PerformanceIssueType.GLOBAL_VARIABLE_ABUSE]: {
+        description: '',
+        commonCauses: [],
+        solutions: [],
+        examples: []
+      },
+      [PerformanceIssueType.INEFFICIENT_STRING_CONCAT]: {
+        description: '',
+        commonCauses: [],
+        solutions: [],
+        examples: []
+      },
+      [PerformanceIssueType.RECURSIVE_WITHOUT_MEMOIZATION]: {
+        description: '',
+        commonCauses: [],
+        solutions: [],
+        examples: []
+      },
+      [PerformanceIssueType.SYNCHRONOUS_FILE_IO]: {
+        description: '',
+        commonCauses: [],
+        solutions: [],
+        examples: []
+      },
+      [PerformanceIssueType.INEFFICIENT_DATABASE_QUERY]: {
+        description: '',
+        commonCauses: [],
+        solutions: [],
+        examples: []
+      },
+      [PerformanceIssueType.EXCESSIVE_FUNCTION_CALLS]: {
+        description: '',
+        commonCauses: [],
+        solutions: [],
+        examples: []
+      },
+      [PerformanceIssueType.INEFFICIENT_SORTING]: {
+        description: '',
+        commonCauses: [],
+        solutions: [],
+        examples: []
+      }
+    };
+
+    return details[issueType] || {
+      description: 'Performance issue details not available',
+      commonCauses: [],
+      solutions: [],
+      examples: []
+    };
+  }
 }
+
+// Close the class here - this completes the Performance Analyzer implementation

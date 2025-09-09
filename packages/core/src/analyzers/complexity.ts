@@ -57,7 +57,7 @@ export class ComplexityAnalyzer {
   /**
    * Analyze complexity of source code
    */
-  async analyzeComplexity(code: string, language: Language): Promise<ComplexityResult> {
+  async analyzeComplexity(code: string, languageId: string, filePath: string | undefined, language: Language): Promise<ComplexityResult> {
     // Parse the code into AST
     const parseResult = await this.astParser.parseCode(code, language);
 

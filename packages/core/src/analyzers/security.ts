@@ -69,6 +69,9 @@ interface SecurityPattern {
 }
 
 export class SecurityAnalyzer {
+  analyzeSecurity(content: string, language: string, filePath: string | undefined): any {
+    throw new Error('Method not implemented.');
+  }
   private securityRules: Map<Language, SecurityRule[]>;
 
   constructor() {

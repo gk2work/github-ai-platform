@@ -1,25 +1,42 @@
 // packages/core/src/analyzers/security.ts
+// Step 1A: Complete SecurityAnalyzer Implementation
 
-import { Language, Severity } from '@github-ai/shared';
-import { ASTNode, astParser } from '../parsers/ast-parser';
+import { Language, AnalysisResult, AnalysisCategory, Severity, FileLocation } from '@github-ai/shared';
+import { createAnalysisResult } from '../utils/analysis-utils';
 
 export interface SecurityIssue {
-  type: SecurityVulnerabilityType;
-  severity: Severity;
+  type: SecurityIssueType;
   title: string;
   description: string;
-  line: number;
-  column: number;
+  severity: Severity;
+  location: FileLocation;
   evidence: string;
-  suggestion: string;
   cweId?: string; // Common Weakness Enumeration ID
-  confidence: number; // 0-1
+  suggestion: string;
+  confidence: number;
+}
+
+export enum SecurityIssueType {
+  SQL_INJECTION = 'sql_injection',
+  XSS_VULNERABILITY = 'xss_vulnerability',
+  HARDCODED_SECRET = 'hardcoded_secret',
+  INSECURE_CRYPTO = 'insecure_crypto',
+  PATH_TRAVERSAL = 'path_traversal',
+  COMMAND_INJECTION = 'command_injection',
+  UNSAFE_EVAL = 'unsafe_eval',
+  WEAK_AUTHENTICATION = 'weak_authentication',
+  INSECURE_DESERIALIZATION = 'insecure_deserialization',
+  MISSING_AUTHORIZATION = 'missing_authorization',
+  INSECURE_RANDOM = 'insecure_random',
+  REGEX_DOS = 'regex_dos',
+  UNSAFE_REDIRECT = 'unsafe_redirect'
 }
 
 export interface SecurityAnalysisResult {
   issues: SecurityIssue[];
   summary: SecuritySummary;
-  analysisTime: number;
+  executionTime: number;
+  scannedPatterns: number;
 }
 
 export interface SecuritySummary {
@@ -28,494 +45,384 @@ export interface SecuritySummary {
   highIssues: number;
   mediumIssues: number;
   lowIssues: number;
-  categories: Record<SecurityVulnerabilityType, number>;
-  securityScore: number; // 0-100
-}
-
-export type SecurityVulnerabilityType = 
-  | 'sql_injection'
-  | 'xss'
-  | 'path_traversal'
-  | 'command_injection'
-  | 'hardcoded_secrets'
-  | 'weak_crypto'
-  | 'insecure_random'
-  | 'unsafe_deserialization'
-  | 'prototype_pollution'
-  | 'regex_dos'
-  | 'open_redirect'
-  | 'csrf'
-  | 'information_disclosure'
-  | 'insecure_transport'
-  | 'weak_authentication';
-
-interface SecurityRule {
-  id: string;
-  type: SecurityVulnerabilityType;
-  severity: Severity;
-  title: string;
-  description: string;
-  cweId?: string;
-  patterns: SecurityPattern[];
-  languages: Language[];
-  confidence: number;
-}
-
-interface SecurityPattern {
-  type: 'regex' | 'ast_node' | 'function_call';
-  pattern: string | RegExp;
-  context?: string[];
-  excludePatterns?: (string | RegExp)[];
+  issuesByType: Record<SecurityIssueType, number>;
+  overallRiskScore: number; // 0-100
+  recommendations: string[];
 }
 
 export class SecurityAnalyzer {
-  analyzeSecurity(content: string, language: string, filePath: string | undefined): any {
-    throw new Error('Method not implemented.');
-  }
-  private securityRules: Map<Language, SecurityRule[]>;
+  private securityPatterns: SecurityPattern[] = [];
 
   constructor() {
-    this.securityRules = this.initializeSecurityRules();
+    this.initializeSecurityPatterns();
   }
 
   /**
    * Analyze code for security vulnerabilities
    */
-  async analyzeCode(code: string, language: Language, filePath: string = ''): Promise<SecurityAnalysisResult> {
+  async analyzeSecurity(
+    content: string,
+    language: Language,
+    filePath?: string
+  ): Promise<SecurityAnalysisResult> {
     const startTime = Date.now();
     const issues: SecurityIssue[] = [];
     
-    // Get language-specific rules
-    const rules = this.securityRules.get(language) || [];
-    
-    try {
-      // Try AST-based analysis first
-      const parseResult = await astParser.parseCode(code, language);
-      
-      if (parseResult.success && parseResult.ast) {
-        // AST-based analysis
-        for (const rule of rules) {
-          const ruleIssues = await this.analyzeWithAST(code, parseResult.ast, rule, filePath);
-          issues.push(...ruleIssues);
-        }
-      } else {
-        // Fallback to regex-based analysis
-        for (const rule of rules) {
-          const ruleIssues = this.analyzeWithRegex(code, rule, filePath);
-          issues.push(...ruleIssues);
-        }
-      }
-      
-    } catch (error) {
-      console.warn('Security analysis failed, using regex fallback:', error);
-      
-      // Fallback to regex-based analysis
-      for (const rule of rules) {
-        const ruleIssues = this.analyzeWithRegex(code, rule, filePath);
-        issues.push(...ruleIssues);
+    // Run all security checks
+    const patterns = this.getLanguageSpecificPatterns(language);
+    let scannedPatterns = 0;
+
+    for (const pattern of patterns) {
+      try {
+        const patternIssues = await this.scanPattern(content, pattern, filePath);
+        issues.push(...patternIssues);
+        scannedPatterns++;
+      } catch (error) {
+        console.warn(`Security pattern scan failed: ${pattern.name}`, error);
       }
     }
 
-    const summary = this.generateSummary(issues);
-    const analysisTime = Date.now() - startTime;
-
+    const summary = this.generateSecuritySummary(issues);
+    
     return {
       issues,
       summary,
-      analysisTime
+      executionTime: Date.now() - startTime,
+      scannedPatterns
     };
   }
 
   /**
-   * AST-based security analysis
+   * Quick security scan for specific vulnerability types
    */
-  private async analyzeWithAST(code: string, ast: ASTNode, rule: SecurityRule, filePath: string): Promise<SecurityIssue[]> {
+  async quickSecurityScan(
+    content: string,
+    language: Language,
+    issueTypes: SecurityIssueType[]
+  ): Promise<SecurityIssue[]> {
+    const patterns = this.securityPatterns.filter(p => 
+      issueTypes.includes(p.issueType) && p.languages.includes(language)
+    );
+
     const issues: SecurityIssue[] = [];
-    const lines = code.split('\n');
-
-    const traverse = (node: ASTNode) => {
-      for (const pattern of rule.patterns) {
-        if (pattern.type === 'ast_node') {
-          if (this.matchesASTPattern(node, pattern)) {
-            // Check if it's a real vulnerability (not a false positive)
-            if (!this.isExcluded(node.text, pattern.excludePatterns)) {
-              const issue: SecurityIssue = {
-                type: rule.type,
-                severity: rule.severity,
-                title: rule.title,
-                description: rule.description,
-                line: node.startLine,
-                column: node.startColumn,
-                evidence: this.extractEvidence(node.text, lines, node.startLine),
-                suggestion: this.generateSuggestion(rule.type, node.text),
-                cweId: rule.cweId,
-                confidence: rule.confidence
-              };
-              issues.push(issue);
-            }
-          }
-        } else if (pattern.type === 'function_call') {
-          if (this.matchesFunctionCall(node, pattern)) {
-            if (!this.isExcluded(node.text, pattern.excludePatterns)) {
-              const issue: SecurityIssue = {
-                type: rule.type,
-                severity: rule.severity,
-                title: rule.title,
-                description: rule.description,
-                line: node.startLine,
-                column: node.startColumn,
-                evidence: this.extractEvidence(node.text, lines, node.startLine),
-                suggestion: this.generateSuggestion(rule.type, node.text),
-                cweId: rule.cweId,
-                confidence: rule.confidence
-              };
-              issues.push(issue);
-            }
-          }
-        }
-      }
-
-      // Recursively analyze children
-      for (const child of node.children) {
-        traverse(child);
-      }
-    };
-
-    traverse(ast);
-    return issues;
-  }
-
-  /**
-   * Regex-based security analysis (fallback)
-   */
-  private analyzeWithRegex(code: string, rule: SecurityRule, filePath: string): SecurityIssue[] {
-    const issues: SecurityIssue[] = [];
-    const lines = code.split('\n');
-
-    for (const pattern of rule.patterns) {
-      if (pattern.type === 'regex' && pattern.pattern instanceof RegExp) {
-        const regex = pattern.pattern;
-        
-        lines.forEach((line, index) => {
-          const matches = line.match(regex);
-          if (matches && !this.isExcluded(line, pattern.excludePatterns)) {
-            const issue: SecurityIssue = {
-              type: rule.type,
-              severity: rule.severity,
-              title: rule.title,
-              description: rule.description,
-              line: index + 1,
-              column: line.indexOf(matches[0]),
-              evidence: this.extractEvidence(line, lines, index + 1),
-              suggestion: this.generateSuggestion(rule.type, line),
-              cweId: rule.cweId,
-              confidence: rule.confidence
-            };
-            issues.push(issue);
-          }
-        });
-      }
+    
+    for (const pattern of patterns) {
+      const patternIssues = await this.scanPattern(content, pattern);
+      issues.push(...patternIssues);
     }
 
     return issues;
   }
 
   /**
-   * Check if AST node matches security pattern
+   * Initialize security patterns for different vulnerability types
    */
-  private matchesASTPattern(node: ASTNode, pattern: SecurityPattern): boolean {
-    if (pattern.type !== 'ast_node') return false;
-    
-    const patternStr = pattern.pattern as string;
-    
-    // Check node type
-    if (node.type === patternStr) return true;
-    
-    // Check node content
-    if (node.text.includes(patternStr)) return true;
-    
-    return false;
-  }
+  private initializeSecurityPatterns(): void {
+    this.securityPatterns = [
+      // SQL Injection patterns
+      {
+        name: 'SQL Injection - String Concatenation',
+        issueType: SecurityIssueType.SQL_INJECTION,
+        languages: ['typescript', 'javascript', 'python', 'java'],
+        pattern: /(['"`])\s*(SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER)\s+.*\+.*\1/gi,
+        severity: 'critical',
+        cweId: 'CWE-89',
+        description: 'SQL query constructed with string concatenation',
+        suggestion: 'Use parameterized queries or prepared statements'
+      },
+      
+      // XSS Vulnerabilities
+      {
+        name: 'XSS - innerHTML Usage',
+        issueType: SecurityIssueType.XSS_VULNERABILITY,
+        languages: ['typescript', 'javascript'],
+        pattern: /\.innerHTML\s*=\s*.*\+/g,
+        severity: 'high',
+        cweId: 'CWE-79',
+        description: 'Direct innerHTML assignment with concatenated content',
+        suggestion: 'Use textContent or proper sanitization libraries'
+      },
 
-  /**
-   * Check if AST node represents a dangerous function call
-   */
-  private matchesFunctionCall(node: ASTNode, pattern: SecurityPattern): boolean {
-    if (pattern.type !== 'function_call') return false;
-    
-    const functionName = pattern.pattern as string;
-    
-    // Check if this is a call expression with the dangerous function
-    if (node.type === 'call_expression' || node.type === 'function_call') {
-      return node.text.includes(functionName);
-    }
-    
-    return false;
-  }
+      // Hardcoded Secrets
+      {
+        name: 'Hardcoded API Key',
+        issueType: SecurityIssueType.HARDCODED_SECRET,
+        languages: ['typescript', 'javascript', 'python', 'java', 'go'],
+        pattern: /(?:api[_-]?key|secret[_-]?key|access[_-]?token)\s*[:=]\s*['"][a-zA-Z0-9]{16,}['\"]/gi,
+        severity: 'critical',
+        cweId: 'CWE-798',
+        description: 'Hardcoded API key or secret detected',
+        suggestion: 'Store secrets in environment variables or secure key management'
+      },
 
-  /**
-   * Check if match should be excluded (reduce false positives)
-   */
-  private isExcluded(text: string, excludePatterns?: (string | RegExp)[]): boolean {
-    if (!excludePatterns) return false;
-    
-    return excludePatterns.some(pattern => {
-      if (pattern instanceof RegExp) {
-        return pattern.test(text);
-      } else {
-        return text.includes(pattern);
+      // Insecure Crypto
+      {
+        name: 'Weak Cryptographic Hash',
+        issueType: SecurityIssueType.INSECURE_CRYPTO,
+        languages: ['typescript', 'javascript', 'python', 'java'],
+        pattern: /\b(md5|sha1)\b/gi,
+        severity: 'medium',
+        cweId: 'CWE-328',
+        description: 'Use of weak cryptographic hash function',
+        suggestion: 'Use SHA-256 or stronger hash functions'
+      },
+
+      // Command Injection
+      {
+        name: 'Command Injection - exec/eval',
+        issueType: SecurityIssueType.COMMAND_INJECTION,
+        languages: ['typescript', 'javascript', 'python'],
+        pattern: /\b(exec|system|eval|execSync)\s*\(\s*.*\+/g,
+        severity: 'critical',
+        cweId: 'CWE-78',
+        description: 'Command execution with concatenated user input',
+        suggestion: 'Use parameterized commands or input validation'
+      },
+
+      // Path Traversal
+      {
+        name: 'Path Traversal - File Access',
+        issueType: SecurityIssueType.PATH_TRAVERSAL,
+        languages: ['typescript', 'javascript', 'python', 'java'],
+        pattern: /\.\.\//g,
+        severity: 'high',
+        cweId: 'CWE-22',
+        description: 'Potential path traversal vulnerability',
+        suggestion: 'Validate and sanitize file paths'
+      },
+
+      // Unsafe eval
+      {
+        name: 'Unsafe eval Usage',
+        issueType: SecurityIssueType.UNSAFE_EVAL,
+        languages: ['typescript', 'javascript'],
+        pattern: /\beval\s*\(/g,
+        severity: 'high',
+        cweId: 'CWE-95',
+        description: 'Use of eval() function',
+        suggestion: 'Avoid eval() or use safer alternatives like JSON.parse()'
+      },
+
+      // Regex DoS
+      {
+        name: 'ReDoS - Catastrophic Backtracking',
+        issueType: SecurityIssueType.REGEX_DOS,
+        languages: ['typescript', 'javascript', 'python', 'java'],
+        pattern: /\/.*\(\.\*\+.*\)\+.*\/|\/.*\(\.\+\*.*\)\*.*\//g,
+        severity: 'medium',
+        cweId: 'CWE-1333',
+        description: 'Regular expression vulnerable to ReDoS attacks',
+        suggestion: 'Review regex pattern for catastrophic backtracking'
+      },
+
+      // Insecure Random
+      {
+        name: 'Insecure Random Number Generation',
+        issueType: SecurityIssueType.INSECURE_RANDOM,
+        languages: ['typescript', 'javascript', 'java'],
+        pattern: /Math\.random\(\)|Random\(\)|new Random\(\)/g,
+        severity: 'medium',
+        cweId: 'CWE-338',
+        description: 'Use of insecure random number generator',
+        suggestion: 'Use cryptographically secure random generators'
       }
-    });
+    ];
   }
 
   /**
-   * Extract evidence around the vulnerability
+   * Scan content for a specific security pattern
    */
-  private extractEvidence(matchText: string, lines: string[], lineNumber: number): string {
-    const contextLines = 2;
-    const start = Math.max(0, lineNumber - contextLines - 1);
-    const end = Math.min(lines.length, lineNumber + contextLines);
+  private async scanPattern(
+    content: string,
+    pattern: SecurityPattern,
+    filePath?: string
+  ): Promise<SecurityIssue[]> {
+    const issues: SecurityIssue[] = [];
+    const lines = content.split('\n');
     
-    const context = lines.slice(start, end).map((line, index) => {
-      const actualLineNumber = start + index + 1;
-      const marker = actualLineNumber === lineNumber ? '> ' : '  ';
-      return `${marker}${actualLineNumber}: ${line}`;
-    }).join('\n');
-    
-    return context;
+    let match;
+    while ((match = pattern.pattern.exec(content)) !== null) {
+      const lineNumber = this.getLineNumber(content, match.index);
+      const columnNumber = this.getColumnNumber(content, match.index);
+      
+      const location: FileLocation = {
+        file: filePath || 'unknown',
+        line: lineNumber,
+        column: columnNumber,
+        endLine: lineNumber,
+        endColumn: columnNumber + match[0].length
+      };
+
+      const issue: SecurityIssue = {
+        type: pattern.issueType,
+        title: pattern.name,
+        description: pattern.description,
+        severity: pattern.severity,
+        location,
+        evidence: match[0],
+        cweId: pattern.cweId,
+        suggestion: pattern.suggestion,
+        confidence: this.calculateConfidence(pattern, match[0])
+      };
+
+      issues.push(issue);
+    }
+
+    return issues;
   }
 
   /**
-   * Generate security suggestion based on vulnerability type
+   * Get language-specific security patterns
    */
-  private generateSuggestion(type: SecurityVulnerabilityType, evidence: string): string {
-    const suggestions: Record<SecurityVulnerabilityType, string> = {
-      sql_injection: 'Use parameterized queries or prepared statements instead of string concatenation',
-      xss: 'Sanitize user input and use proper output encoding',
-      path_traversal: 'Validate and sanitize file paths, use allowlists for allowed paths',
-      command_injection: 'Avoid executing user input as commands, use allowlists for allowed commands',
-      hardcoded_secrets: 'Move secrets to environment variables or secure credential stores',
-      weak_crypto: 'Use strong encryption algorithms (AES-256, RSA-2048+) and proper implementations',
-      insecure_random: 'Use cryptographically secure random number generators',
-      unsafe_deserialization: 'Validate serialized data and use safe deserialization methods',
-      prototype_pollution: 'Validate object properties and use Map instead of plain objects',
-      regex_dos: 'Review regex patterns for potential ReDoS vulnerabilities',
-      open_redirect: 'Validate redirect URLs against an allowlist',
-      csrf: 'Implement CSRF tokens and verify origin headers',
-      information_disclosure: 'Remove sensitive information from error messages and logs',
-      insecure_transport: 'Use HTTPS/TLS for all sensitive communications',
-      weak_authentication: 'Implement strong authentication mechanisms and session management'
-    };
-    
-    return suggestions[type] || 'Review this code for potential security implications';
+  private getLanguageSpecificPatterns(language: Language): SecurityPattern[] {
+    return this.securityPatterns.filter(pattern => 
+      pattern.languages.includes(language)
+    );
   }
 
   /**
    * Generate security analysis summary
    */
-  private generateSummary(issues: SecurityIssue[]): SecuritySummary {
-    const summary: SecuritySummary = {
-      totalIssues: issues.length,
-      criticalIssues: 0,
-      highIssues: 0,
-      mediumIssues: 0,
-      lowIssues: 0,
-      categories: {} as Record<SecurityVulnerabilityType, number>,
-      securityScore: 100
-    };
+  private generateSecuritySummary(issues: SecurityIssue[]): SecuritySummary {
+    const issuesByType: Record<SecurityIssueType, number> = {} as Record<SecurityIssueType, number>;
+    
+    // Initialize counts
+    Object.values(SecurityIssueType).forEach(type => {
+      issuesByType[type] = 0;
+    });
 
-    // Count by severity
-    for (const issue of issues) {
+    let criticalIssues = 0;
+    let highIssues = 0;
+    let mediumIssues = 0;
+    let lowIssues = 0;
+
+    issues.forEach(issue => {
+      issuesByType[issue.type]++;
+      
       switch (issue.severity) {
-        case 'critical':
-          summary.criticalIssues++;
-          break;
-        case 'high':
-          summary.highIssues++;
-          break;
-        case 'medium':
-          summary.mediumIssues++;
-          break;
-        case 'low':
-          summary.lowIssues++;
-          break;
+        case 'critical': criticalIssues++; break;
+        case 'high': highIssues++; break;
+        case 'medium': mediumIssues++; break;
+        case 'low': lowIssues++; break;
       }
+    });
 
-      // Count by category
-      summary.categories[issue.type] = (summary.categories[issue.type] || 0) + 1;
-    }
+    const overallRiskScore = this.calculateRiskScore(
+      criticalIssues,
+      highIssues,
+      mediumIssues,
+      lowIssues
+    );
 
-    // Calculate security score
-    const severityWeights = { critical: 25, high: 10, medium: 5, low: 1 };
-    const totalPenalty = 
-      summary.criticalIssues * severityWeights.critical +
-      summary.highIssues * severityWeights.high +
-      summary.mediumIssues * severityWeights.medium +
-      summary.lowIssues * severityWeights.low;
+    const recommendations = this.generateSecurityRecommendations(issues);
 
-    summary.securityScore = Math.max(0, 100 - totalPenalty);
-
-    return summary;
+    return {
+      totalIssues: issues.length,
+      criticalIssues,
+      highIssues,
+      mediumIssues,
+      lowIssues,
+      issuesByType,
+      overallRiskScore,
+      recommendations
+    };
   }
 
   /**
-   * Initialize security rules for different languages
+   * Calculate overall security risk score (0-100)
    */
-  private initializeSecurityRules(): Map<Language, SecurityRule[]> {
-    const rules = new Map<Language, SecurityRule[]>();
+  private calculateRiskScore(
+    critical: number,
+    high: number,
+    medium: number,
+    low: number
+  ): number {
+    const maxScore = 100;
+    const weights = { critical: 25, high: 10, medium: 3, low: 1 };
+    
+    const totalScore = (critical * weights.critical) +
+                      (high * weights.high) +
+                      (medium * weights.medium) +
+                      (low * weights.low);
+    
+    return Math.min(totalScore, maxScore);
+  }
 
-    // TypeScript/JavaScript security rules
-    const jsRules: SecurityRule[] = [
-      {
-        id: 'js_sql_injection',
-        type: 'sql_injection',
-        severity: 'high',
-        title: 'Potential SQL Injection',
-        description: 'Dynamic SQL query construction detected',
-        cweId: 'CWE-89',
-        patterns: [
-          {
-            type: 'regex',
-            pattern: /query\s*=\s*["`'].*\+.*["`']/i,
-            excludePatterns: [/\/\*.*\*\//, /\/\/.*$/]
-          },
-          {
-            type: 'function_call',
-            pattern: 'query',
-            context: ['string concatenation']
-          }
-        ],
-        languages: ['typescript', 'javascript'],
-        confidence: 0.8
-      },
-      {
-        id: 'js_xss',
-        type: 'xss',
-        severity: 'high',
-        title: 'Potential XSS Vulnerability',
-        description: 'Unsafe HTML content insertion detected',
-        cweId: 'CWE-79',
-        patterns: [
-          {
-            type: 'regex',
-            pattern: /\.innerHTML\s*=\s*.*\+/i
-          },
-          {
-            type: 'function_call',
-            pattern: 'dangerouslySetInnerHTML'
-          }
-        ],
-        languages: ['typescript', 'javascript'],
-        confidence: 0.7
-      },
-      {
-        id: 'js_hardcoded_secrets',
-        type: 'hardcoded_secrets',
-        severity: 'critical',
-        title: 'Hardcoded Secret Detected',
-        description: 'Potential API key or password found in code',
-        cweId: 'CWE-798',
-        patterns: [
-          {
-            type: 'regex',
-            pattern: /(api[_-]?key|password|secret|token)\s*[:=]\s*['"]\w{8,}['"]/i,
-            excludePatterns: [/test/i, /example/i, /placeholder/i]
-          }
-        ],
-        languages: ['typescript', 'javascript'],
-        confidence: 0.9
-      },
-      {
-        id: 'js_command_injection',
-        type: 'command_injection',
-        severity: 'high',
-        title: 'Potential Command Injection',
-        description: 'Dynamic command execution detected',
-        cweId: 'CWE-78',
-        patterns: [
-          {
-            type: 'function_call',
-            pattern: 'exec',
-            excludePatterns: [/^['"]\w+['"]$/] // Exclude static commands
-          },
-          {
-            type: 'function_call',
-            pattern: 'spawn'
-          }
-        ],
-        languages: ['typescript', 'javascript'],
-        confidence: 0.8
-      }
-    ];
+  /**
+   * Generate security recommendations
+   */
+  private generateSecurityRecommendations(issues: SecurityIssue[]): string[] {
+    const recommendations: string[] = [];
+    
+    if (issues.some(i => i.type === SecurityIssueType.SQL_INJECTION)) {
+      recommendations.push('Implement parameterized queries to prevent SQL injection');
+    }
+    
+    if (issues.some(i => i.type === SecurityIssueType.XSS_VULNERABILITY)) {
+      recommendations.push('Sanitize user input and use secure DOM manipulation methods');
+    }
+    
+    if (issues.some(i => i.type === SecurityIssueType.HARDCODED_SECRET)) {
+      recommendations.push('Move secrets to environment variables or secure key management');
+    }
+    
+    if (issues.some(i => i.type === SecurityIssueType.INSECURE_CRYPTO)) {
+      recommendations.push('Upgrade to secure cryptographic algorithms');
+    }
 
-    // Python security rules
-    const pythonRules: SecurityRule[] = [
-      {
-        id: 'py_sql_injection',
-        type: 'sql_injection',
-        severity: 'high',
-        title: 'Potential SQL Injection',
-        description: 'Dynamic SQL query construction detected',
-        cweId: 'CWE-89',
-        patterns: [
-          {
-            type: 'regex',
-            pattern: /execute\s*\(\s*f?["`'].*%.*["`']/i
-          },
-          {
-            type: 'regex',
-            pattern: /query\s*=\s*f?["`'].*\{.*\}.*["`']/i
-          }
-        ],
-        languages: ['python'],
-        confidence: 0.8
-      },
-      {
-        id: 'py_hardcoded_secrets',
-        type: 'hardcoded_secrets',
-        severity: 'critical',
-        title: 'Hardcoded Secret Detected',
-        description: 'Potential API key or password found in code',
-        cweId: 'CWE-798',
-        patterns: [
-          {
-            type: 'regex',
-            pattern: /(api[_-]?key|password|secret|token)\s*=\s*['"]\w{8,}['"]/i,
-            excludePatterns: [/test/i, /example/i, /placeholder/i]
-          }
-        ],
-        languages: ['python'],
-        confidence: 0.9
-      },
-      {
-        id: 'py_command_injection',
-        type: 'command_injection',
-        severity: 'high',
-        title: 'Potential Command Injection',
-        description: 'Dynamic command execution detected',
-        cweId: 'CWE-78',
-        patterns: [
-          {
-            type: 'function_call',
-            pattern: 'os.system'
-          },
-          {
-            type: 'function_call',
-            pattern: 'subprocess.call'
-          }
-        ],
-        languages: ['python'],
-        confidence: 0.8
-      }
-    ];
+    if (issues.length > 10) {
+      recommendations.push('Consider implementing automated security testing in CI/CD pipeline');
+    }
 
-    rules.set('typescript', jsRules);
-    rules.set('javascript', jsRules);
-    rules.set('python', pythonRules);
+    return recommendations;
+  }
 
-    return rules;
+  /**
+   * Calculate confidence score for a pattern match
+   */
+  private calculateConfidence(pattern: SecurityPattern, evidence: string): number {
+    let confidence = 0.7; // Base confidence
+    
+    // Increase confidence for exact dangerous patterns
+    if (evidence.includes('eval(') || evidence.includes('innerHTML =')) {
+      confidence += 0.2;
+    }
+    
+    // Decrease confidence for common false positives
+    if (evidence.includes('test') || evidence.includes('example')) {
+      confidence -= 0.2;
+    }
+    
+    return Math.max(0.1, Math.min(1.0, confidence));
+  }
+
+  /**
+   * Get line number from character index
+   */
+  private getLineNumber(content: string, index: number): number {
+    return content.substring(0, index).split('\n').length;
+  }
+
+  /**
+   * Get column number from character index
+   */
+  private getColumnNumber(content: string, index: number): number {
+    const lastNewlineIndex = content.lastIndexOf('\n', index);
+    return index - lastNewlineIndex;
   }
 }
 
-// Export singleton instance
+// Security pattern interface
+interface SecurityPattern {
+  name: string;
+  issueType: SecurityIssueType;
+  languages: Language[];
+  pattern: RegExp;
+  severity: Severity;
+  cweId?: string;
+  description: string;
+  suggestion: string;
+}
+
+// Export for backward compatibility and integration
 export const securityAnalyzer = new SecurityAnalyzer();

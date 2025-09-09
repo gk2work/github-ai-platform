@@ -1,7 +1,7 @@
 // packages/core/src/analyzers/complexity.ts
+// COMPLETE IMPLEMENTATION - Replace your existing complexity.ts
 
 import { Language } from '@github-ai/shared';
-import { ASTNode, ASTParser } from '../parsers/ast-parser';
 
 export interface ComplexityResult {
   cyclomaticComplexity: number;
@@ -45,269 +45,472 @@ export interface FileComplexity {
   maintainabilityIndex: number;
 }
 
+interface ComplexityKeywords {
+  functionKeywords: string[];
+  classKeywords: string[];
+  controlFlowKeywords: string[];
+  decisionKeywords: string[];
+  loopKeywords: string[];
+  exceptionKeywords: string[];
+  logicalOperators: string[];
+}
+
 export class ComplexityAnalyzer {
   private languageKeywords: Map<Language, ComplexityKeywords>;
-  private astParser: ASTParser; 
 
   constructor() {
     this.languageKeywords = this.initializeLanguageKeywords();
-    this.astParser = new ASTParser();
   }
 
   /**
    * Analyze complexity of source code
    */
-  async analyzeComplexity(code: string, languageId: string, filePath: string | undefined, language: Language): Promise<ComplexityResult> {
-    // Parse the code into AST
-    const parseResult = await this.astParser.parseCode(code, language);
-
-    if (!parseResult.success || !parseResult.ast) {
-      // Fallback to basic text-based analysis
-      return this.fallbackTextAnalysis(code, language);
-    }
-
-    const ast = parseResult.ast;
+  async analyzeComplexity(
+    code: string, 
+    languageId: string, 
+    filePath: string | undefined, 
+    language: Language
+  ): Promise<ComplexityResult> {
     const keywords = this.languageKeywords.get(language);
-    
     if (!keywords) {
-      throw new Error(`Language ${language} not supported for complexity analysis`);
+      throw new Error(`Unsupported language: ${language}`);
     }
 
-    // Analyze functions and classes
-    const functions = this.extractFunctions(ast, keywords);
-    const classes = this.extractClasses(ast, keywords);
+    const lines = code.split('\n');
     
-    // Calculate function complexities
-    const functionComplexities = functions.map(func => 
-      this.analyzeFunctionComplexity(func, keywords)
-    );
+    // Analyze functions
+    const functions = this.extractFunctions(code, keywords, lines);
     
-    // Calculate class complexities
-    const classComplexities = classes.map(cls => 
-      this.analyzeClassComplexity(cls, keywords)
-    );
+    // Analyze classes
+    const classes = this.extractClasses(code, keywords, lines, functions);
     
-    // Calculate overall file complexity
-    const fileComplexity = this.calculateFileComplexity(ast, functionComplexities);
+    // Calculate file-level metrics
+    const fileComplexity = this.calculateFileComplexity(functions, classes, lines.length);
     
     // Calculate overall metrics
-    const cyclomaticComplexity = this.calculateCyclomaticComplexity(ast, keywords);
-    const cognitiveComplexity = this.calculateCognitiveComplexity(ast, keywords);
-    const nestingDepth = this.calculateMaxNestingDepth(ast);
+    const totalCyclomatic = functions.reduce((sum, f) => sum + f.cyclomaticComplexity, 0);
+    const totalCognitive = functions.reduce((sum, f) => sum + f.cognitiveComplexity, 0);
+    const maxNesting = Math.max(...functions.map(f => f.nestingDepth), 0);
 
     return {
-      cyclomaticComplexity,
-      cognitiveComplexity,
-      nestingDepth,
-      functionComplexity: functionComplexities,
-      classComplexity: classComplexities,
+      cyclomaticComplexity: totalCyclomatic,
+      cognitiveComplexity: totalCognitive,
+      nestingDepth: maxNesting,
+      functionComplexity: functions,
+      classComplexity: classes,
       fileComplexity
     };
   }
 
   /**
-   * Extract function nodes from AST
+   * Extract and analyze functions from code
    */
-  private extractFunctions(ast: ASTNode, keywords: ComplexityKeywords): ASTNode[] {
-    const functions: ASTNode[] = [];
+  private extractFunctions(code: string, keywords: ComplexityKeywords, lines: string[]): FunctionComplexity[] {
+    const functions: FunctionComplexity[] = [];
     
-    const traverse = (node: ASTNode) => {
-      // Check if this node represents a function
-      if (keywords.functionTypes.includes(node.type)) {
-        functions.push(node);
-      }
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
       
-      // Recursively check children
-      for (const child of node.children) {
-        traverse(child);
+      // Check if line contains function declaration
+      const functionMatch = this.findFunctionDeclaration(line, keywords);
+      if (functionMatch) {
+        const func = this.analyzeFunctionComplexity(
+          code, 
+          lines, 
+          i, 
+          functionMatch.name, 
+          functionMatch.isAsync,
+          functionMatch.isExported,
+          keywords
+        );
+        if (func) {
+          functions.push(func);
+        }
       }
-    };
+    }
     
-    traverse(ast);
     return functions;
   }
 
   /**
-   * Extract class nodes from AST
+   * Extract and analyze classes from code
    */
-  private extractClasses(ast: ASTNode, keywords: ComplexityKeywords): ASTNode[] {
-    const classes: ASTNode[] = [];
+  private extractClasses(
+    code: string, 
+    keywords: ComplexityKeywords, 
+    lines: string[],
+    allFunctions: FunctionComplexity[]
+  ): ClassComplexity[] {
+    const classes: ClassComplexity[] = [];
     
-    const traverse = (node: ASTNode) => {
-      if (keywords.classTypes.includes(node.type)) {
-        classes.push(node);
-      }
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
       
-      for (const child of node.children) {
-        traverse(child);
+      // Check if line contains class declaration
+      const classMatch = this.findClassDeclaration(line, keywords);
+      if (classMatch) {
+        const classInfo = this.analyzeClassComplexity(
+          code,
+          lines,
+          i,
+          classMatch.name,
+          classMatch.isExported,
+          allFunctions
+        );
+        if (classInfo) {
+          classes.push(classInfo);
+        }
       }
-    };
+    }
     
-    traverse(ast);
     return classes;
+  }
+
+  /**
+   * Find function declaration in a line
+   */
+  private findFunctionDeclaration(line: string, keywords: ComplexityKeywords): {
+    name: string;
+    isAsync: boolean;
+    isExported: boolean;
+  } | null {
+    // TypeScript/JavaScript patterns
+    const patterns = [
+      /(?:export\s+)?(?:async\s+)?function\s+(\w+)/,
+      /(?:export\s+)?const\s+(\w+)\s*=\s*(?:async\s+)?\(/,
+      /(?:export\s+)?(\w+)\s*:\s*(?:async\s+)?\(/,
+      /(?:export\s+)?(\w+)\s*\(\s*.*\)\s*=>/,
+      // Python patterns
+      /def\s+(\w+)/,
+      // Go patterns
+      /func\s+(\w+)/,
+      // Java patterns
+      /(?:public|private|protected)?\s*(?:static)?\s*(?:\w+\s+)?(\w+)\s*\(/
+    ];
+
+    for (const pattern of patterns) {
+      const match = line.match(pattern);
+      if (match) {
+        return {
+          name: match[1],
+          isAsync: /async/.test(line),
+          isExported: /export/.test(line)
+        };
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Find class declaration in a line
+   */
+  private findClassDeclaration(line: string, keywords: ComplexityKeywords): {
+    name: string;
+    isExported: boolean;
+  } | null {
+    const patterns = [
+      /(?:export\s+)?class\s+(\w+)/,
+      // Python
+      /class\s+(\w+)/,
+      // Java
+      /(?:public|private|protected)?\s*class\s+(\w+)/
+    ];
+
+    for (const pattern of patterns) {
+      const match = line.match(pattern);
+      if (match) {
+        return {
+          name: match[1],
+          isExported: /export/.test(line)
+        };
+      }
+    }
+
+    return null;
   }
 
   /**
    * Analyze complexity of a single function
    */
-  private analyzeFunctionComplexity(funcNode: ASTNode, keywords: ComplexityKeywords): FunctionComplexity {
-    const name = this.extractFunctionName(funcNode);
-    const parameters = this.countParameters(funcNode);
-    const linesOfCode = funcNode.endLine - funcNode.startLine + 1;
-    const isAsync = this.isAsyncFunction(funcNode);
-    const isExported = this.isExported(funcNode);
-    
-    const cyclomaticComplexity = this.calculateCyclomaticComplexity(funcNode, keywords);
-    const cognitiveComplexity = this.calculateCognitiveComplexity(funcNode, keywords);
-    const nestingDepth = this.calculateMaxNestingDepth(funcNode);
+  private analyzeFunctionComplexity(
+    code: string,
+    lines: string[],
+    startLineIndex: number,
+    name: string,
+    isAsync: boolean,
+    isExported: boolean,
+    keywords: ComplexityKeywords
+  ): FunctionComplexity | null {
+    const endLineIndex = this.findFunctionEnd(lines, startLineIndex);
+    if (endLineIndex === -1) return null;
+
+    const functionLines = lines.slice(startLineIndex, endLineIndex + 1);
+    const functionCode = functionLines.join('\n');
+
+    // Calculate complexities
+    const cyclomaticComplexity = this.calculateCyclomaticComplexity(functionCode, keywords);
+    const cognitiveComplexity = this.calculateCognitiveComplexity(functionCode, keywords);
+    const nestingDepth = this.calculateNestingDepth(functionCode);
+    const parameters = this.countParameters(lines[startLineIndex]);
 
     return {
       name,
-      startLine: funcNode.startLine,
-      endLine: funcNode.endLine,
+      startLine: startLineIndex + 1,
+      endLine: endLineIndex + 1,
       cyclomaticComplexity,
       cognitiveComplexity,
       nestingDepth,
       parameters,
-      linesOfCode,
+      linesOfCode: functionLines.length,
       isAsync,
       isExported
     };
   }
 
   /**
-   * Analyze complexity of a class
+   * Analyze complexity of a single class
    */
-  private analyzeClassComplexity(classNode: ASTNode, keywords: ComplexityKeywords): ClassComplexity {
-    const name = this.extractClassName(classNode);
-    const methods = this.extractMethods(classNode, keywords);
-    const properties = this.countProperties(classNode, keywords);
-    const linesOfCode = classNode.endLine - classNode.startLine + 1;
-    const isExported = this.isExported(classNode);
-    
-    const methodComplexities = methods.map(method => 
-      this.analyzeFunctionComplexity(method, keywords)
+  private analyzeClassComplexity(
+    code: string,
+    lines: string[],
+    startLineIndex: number,
+    name: string,
+    isExported: boolean,
+    allFunctions: FunctionComplexity[]
+  ): ClassComplexity | null {
+    const endLineIndex = this.findClassEnd(lines, startLineIndex);
+    if (endLineIndex === -1) return null;
+
+    // Find methods within this class
+    const classMethods = allFunctions.filter(func => 
+      func.startLine >= startLineIndex + 1 && func.endLine <= endLineIndex + 1
     );
-    
-    const cyclomaticComplexity = methodComplexities.reduce(
-      (sum, method) => sum + method.cyclomaticComplexity, 1
-    );
+
+    // Count properties (simplified)
+    const classLines = lines.slice(startLineIndex, endLineIndex + 1);
+    const properties = this.countProperties(classLines);
+
+    const totalComplexity = classMethods.reduce((sum, method) => sum + method.cyclomaticComplexity, 0);
 
     return {
       name,
-      startLine: classNode.startLine,
-      endLine: classNode.endLine,
-      methods: methodComplexities,
+      startLine: startLineIndex + 1,
+      endLine: endLineIndex + 1,
+      methods: classMethods,
       properties,
-      cyclomaticComplexity,
-      linesOfCode,
+      cyclomaticComplexity: totalComplexity,
+      linesOfCode: classLines.length,
       isExported
     };
   }
 
   /**
-   * Calculate cyclomatic complexity (McCabe)
+   * Calculate cyclomatic complexity (McCabe complexity)
    */
-  private calculateCyclomaticComplexity(node: ASTNode, keywords: ComplexityKeywords): number {
+  private calculateCyclomaticComplexity(code: string, keywords: ComplexityKeywords): number {
     let complexity = 1; // Base complexity
-    
-    const traverse = (current: ASTNode) => {
-      // Decision points that increase complexity
-      if (keywords.decisionNodes.includes(current.type)) {
-        complexity++;
+
+    const allKeywords = [
+      ...keywords.controlFlowKeywords,
+      ...keywords.decisionKeywords,
+      ...keywords.loopKeywords,
+      ...keywords.exceptionKeywords
+    ];
+
+    for (const keyword of allKeywords) {
+      const regex = new RegExp(`\\b${keyword}\\b`, 'g');
+      const matches = code.match(regex);
+      if (matches) {
+        complexity += matches.length;
       }
-      
-      // Logical operators
-      if (keywords.logicalOperators.some(op => current.text.includes(op))) {
-        const matches = keywords.logicalOperators.filter(op => 
-          current.text.includes(op)
-        ).length;
-        complexity += matches;
+    }
+
+    // Count logical operators
+    for (const operator of keywords.logicalOperators) {
+      const regex = new RegExp(`\\${operator}`, 'g');
+      const matches = code.match(regex);
+      if (matches) {
+        complexity += matches.length;
       }
-      
-      // Exception handling
-      if (keywords.exceptionNodes.includes(current.type)) {
-        complexity++;
-      }
-      
-      for (const child of current.children) {
-        traverse(child);
-      }
-    };
-    
-    traverse(node);
+    }
+
+    // Count case statements (additional complexity)
+    const caseMatches = code.match(/\bcase\b/g);
+    if (caseMatches) {
+      complexity += caseMatches.length;
+    }
+
     return complexity;
   }
 
   /**
    * Calculate cognitive complexity
    */
-  private calculateCognitiveComplexity(node: ASTNode, keywords: ComplexityKeywords, nestingLevel: number = 0): number {
+  private calculateCognitiveComplexity(code: string, keywords: ComplexityKeywords): number {
     let complexity = 0;
-    
-    for (const child of node.children) {
-      let increment = 0;
+    let nestingLevel = 0;
+    const lines = code.split('\n');
+
+    for (const line of lines) {
+      const trimmed = line.trim();
       
-      // Control flow structures
-      if (keywords.controlFlowNodes.includes(child.type)) {
-        increment = Math.max(1, nestingLevel);
+      // Track nesting level
+      const openBraces = (trimmed.match(/\{/g) || []).length;
+      const closeBraces = (trimmed.match(/\}/g) || []).length;
+      nestingLevel += openBraces - closeBraces;
+
+      // Add complexity for control structures
+      for (const keyword of keywords.controlFlowKeywords) {
+        if (new RegExp(`\\b${keyword}\\b`).test(trimmed)) {
+          complexity += Math.max(1, nestingLevel);
+        }
       }
-      
-      // Logical operators (no nesting increment)
-      if (keywords.logicalOperators.some(op => child.text.includes(op))) {
-        increment = 1;
+
+      // Add complexity for decision points
+      for (const keyword of keywords.decisionKeywords) {
+        if (new RegExp(`\\b${keyword}\\b`).test(trimmed)) {
+          complexity += Math.max(1, nestingLevel);
+        }
       }
-      
-      // Recursion detection
-      if (this.isRecursiveCall(child, node)) {
-        increment = 1;
+
+      // Add complexity for logical operators (no nesting increment)
+      for (const operator of keywords.logicalOperators) {
+        const matches = trimmed.match(new RegExp(`\\${operator}`, 'g'));
+        if (matches) {
+          complexity += matches.length;
+        }
       }
-      
-      complexity += increment;
-      
-      // Increase nesting level for certain structures
-      const newNestingLevel = keywords.nestingNodes.includes(child.type) 
-        ? nestingLevel + 1 
-        : nestingLevel;
-      
-      // Recursively analyze children
-      complexity += this.calculateCognitiveComplexity(child, keywords, newNestingLevel);
     }
-    
-    return complexity;
+
+    return Math.max(complexity, 0);
   }
 
   /**
    * Calculate maximum nesting depth
    */
-  private calculateMaxNestingDepth(node: ASTNode, currentDepth: number = 0): number {
-    let maxDepth = currentDepth;
-    
-    for (const child of node.children) {
-      const isNestingNode = this.isNestingNode(child);
-      const childDepth = isNestingNode ? currentDepth + 1 : currentDepth;
+  private calculateNestingDepth(code: string): number {
+    let maxDepth = 0;
+    let currentDepth = 0;
+    const lines = code.split('\n');
+
+    for (const line of lines) {
+      const trimmed = line.trim();
       
-      const deepestChild = this.calculateMaxNestingDepth(child, childDepth);
-      maxDepth = Math.max(maxDepth, deepestChild);
+      const openBraces = (trimmed.match(/\{/g) || []).length;
+      const closeBraces = (trimmed.match(/\}/g) || []).length;
+      
+      currentDepth += openBraces - closeBraces;
+      maxDepth = Math.max(maxDepth, currentDepth);
+    }
+
+    return maxDepth;
+  }
+
+  /**
+   * Count function parameters
+   */
+  private countParameters(line: string): number {
+    const paramMatch = line.match(/\(([^)]*)\)/);
+    if (!paramMatch || !paramMatch[1].trim()) return 0;
+    
+    const params = paramMatch[1].split(',').filter(p => p.trim());
+    return params.length;
+  }
+
+  /**
+   * Count class properties
+   */
+  private countProperties(classLines: string[]): number {
+    let properties = 0;
+    
+    for (const line of classLines) {
+      const trimmed = line.trim();
+      
+      // TypeScript/JavaScript property patterns
+      if (/^\w+\s*[:=]/.test(trimmed) && !trimmed.includes('function') && !trimmed.includes('=>')) {
+        properties++;
+      }
+      
+      // Python property patterns
+      if (/^self\.\w+\s*=/.test(trimmed)) {
+        properties++;
+      }
     }
     
-    return maxDepth;
+    return properties;
+  }
+
+  /**
+   * Find the end of a function
+   */
+  private findFunctionEnd(lines: string[], startIndex: number): number {
+    let braceCount = 0;
+    let inFunction = false;
+    
+    for (let i = startIndex; i < lines.length; i++) {
+      const line = lines[i];
+      
+      const openBraces = (line.match(/\{/g) || []).length;
+      const closeBraces = (line.match(/\}/g) || []).length;
+      
+      if (openBraces > 0) inFunction = true;
+      
+      braceCount += openBraces - closeBraces;
+      
+      if (inFunction && braceCount === 0) {
+        return i;
+      }
+    }
+    
+    // Fallback: if no braces, assume single line or find next function
+    for (let i = startIndex + 1; i < lines.length; i++) {
+      if (this.findFunctionDeclaration(lines[i], this.languageKeywords.get('typescript')!)) {
+        return i - 1;
+      }
+    }
+    
+    return lines.length - 1;
+  }
+
+  /**
+   * Find the end of a class
+   */
+  private findClassEnd(lines: string[], startIndex: number): number {
+    let braceCount = 0;
+    let inClass = false;
+    
+    for (let i = startIndex; i < lines.length; i++) {
+      const line = lines[i];
+      
+      const openBraces = (line.match(/\{/g) || []).length;
+      const closeBraces = (line.match(/\}/g) || []).length;
+      
+      if (openBraces > 0) inClass = true;
+      
+      braceCount += openBraces - closeBraces;
+      
+      if (inClass && braceCount === 0) {
+        return i;
+      }
+    }
+    
+    return lines.length - 1;
   }
 
   /**
    * Calculate file-level complexity metrics
    */
-  private calculateFileComplexity(ast: ASTNode, functions: FunctionComplexity[]): FileComplexity {
-    const totalCyclomaticComplexity = functions.reduce(
-      (sum, func) => sum + func.cyclomaticComplexity, 0
-    );
+  private calculateFileComplexity(
+    functions: FunctionComplexity[],
+    classes: ClassComplexity[],
+    totalLines: number
+  ): FileComplexity {
+    const totalCyclomaticComplexity = functions.reduce((sum, f) => sum + f.cyclomaticComplexity, 0);
+    const totalCognitiveComplexity = functions.reduce((sum, f) => sum + f.cognitiveComplexity, 0);
     
-    const totalCognitiveComplexity = functions.reduce(
-      (sum, func) => sum + func.cognitiveComplexity, 0
-    );
-    
-    const averageFunctionComplexity = functions.length > 0 
-      ? totalCyclomaticComplexity / functions.length 
+    const averageFunctionComplexity = functions.length > 0
+      ? totalCyclomaticComplexity / functions.length
       : 0;
     
     const maxFunctionComplexity = functions.length > 0
@@ -318,10 +521,8 @@ export class ComplexityAnalyzer {
       ? Math.max(...functions.map(f => f.nestingDepth))
       : 0;
     
-    // Simplified maintainability index
-    const linesOfCode = ast.endLine - ast.startLine + 1;
     const maintainabilityIndex = this.calculateMaintainabilityIndex(
-      linesOfCode, 
+      totalLines,
       averageFunctionComplexity
     );
 
@@ -336,194 +537,75 @@ export class ComplexityAnalyzer {
   }
 
   /**
-   * Helper methods for extracting information from AST nodes
+   * Calculate maintainability index
    */
-  private extractFunctionName(node: ASTNode): string {
-    // Look for identifier nodes that represent the function name
-    for (const child of node.children) {
-      if (child.type === 'identifier' || child.type === 'function_name') {
-        return child.text;
-      }
-    }
-    return 'anonymous';
-  }
-
-  private extractClassName(node: ASTNode): string {
-    for (const child of node.children) {
-      if (child.type === 'identifier' || child.type === 'class_name') {
-        return child.text;
-      }
-    }
-    return 'anonymous';
-  }
-
-  private extractMethods(classNode: ASTNode, keywords: ComplexityKeywords): ASTNode[] {
-    const methods: ASTNode[] = [];
+  private calculateMaintainabilityIndex(linesOfCode: number, avgComplexity: number): number {
+    if (linesOfCode === 0) return 100;
     
-    const traverse = (node: ASTNode) => {
-      if (keywords.methodTypes.includes(node.type)) {
-        methods.push(node);
-      }
-      
-      for (const child of node.children) {
-        traverse(child);
-      }
-    };
-    
-    traverse(classNode);
-    return methods;
-  }
-
-  private countParameters(funcNode: ASTNode): number {
-    // Look for parameter list
-    for (const child of funcNode.children) {
-      if (child.type === 'parameters' || child.type === 'parameter_list') {
-        return child.children.filter(c => c.type === 'parameter').length;
-      }
-    }
-    return 0;
-  }
-
-  private countProperties(classNode: ASTNode, keywords: ComplexityKeywords): number {
-    let count = 0;
-    
-    const traverse = (node: ASTNode) => {
-      if (keywords.propertyTypes.includes(node.type)) {
-        count++;
-      }
-      
-      for (const child of node.children) {
-        traverse(child);
-      }
-    };
-    
-    traverse(classNode);
-    return count;
-  }
-
-  private isAsyncFunction(node: ASTNode): boolean {
-    return node.text.includes('async');
-  }
-
-  private isExported(node: ASTNode): boolean {
-    return node.text.includes('export');
-  }
-
-  private isRecursiveCall(node: ASTNode, functionNode: ASTNode): boolean {
-    const functionName = this.extractFunctionName(functionNode);
-    return node.type === 'call_expression' && node.text.includes(functionName);
-  }
-
-  private isNestingNode(node: ASTNode): boolean {
-    const nestingTypes = [
-      'if_statement', 'while_statement', 'for_statement', 'try_statement',
-      'switch_statement', 'block', 'compound_statement'
-    ];
-    return nestingTypes.includes(node.type);
-  }
-
-  private calculateMaintainabilityIndex(linesOfCode: number, complexity: number): number {
-    // Simplified MI calculation
+    // Simplified maintainability index formula
     const baseScore = 100;
-    const complexityPenalty = complexity * 2;
+    const complexityPenalty = avgComplexity * 3;
     const sizePenalty = Math.log(linesOfCode) * 5;
     
-    return Math.max(0, Math.round(baseScore - complexityPenalty - sizePenalty));
+    const score = Math.max(0, baseScore - complexityPenalty - sizePenalty);
+    return Math.round(score);
   }
 
   /**
-   * Fallback analysis when AST parsing fails
-   */
-  private fallbackTextAnalysis(code: string, language: Language): ComplexityResult {
-    const lines = code.split('\n');
-    const keywords = this.languageKeywords.get(language);
-    
-    let cyclomaticComplexity = 1;
-    let nestingDepth = 0;
-    let maxNesting = 0;
-    
-    if (keywords) {
-      for (const line of lines) {
-        // Count decision points
-        for (const keyword of [...keywords.decisionNodes, ...keywords.controlFlowNodes]) {
-          if (line.includes(keyword)) {
-            cyclomaticComplexity++;
-          }
-        }
-        
-        // Track nesting (simplified)
-        const openBraces = (line.match(/\{/g) || []).length;
-        const closeBraces = (line.match(/\}/g) || []).length;
-        nestingDepth += openBraces - closeBraces;
-        maxNesting = Math.max(maxNesting, nestingDepth);
-      }
-    }
-
-    return {
-      cyclomaticComplexity,
-      cognitiveComplexity: cyclomaticComplexity,
-      nestingDepth: maxNesting,
-      functionComplexity: [],
-      classComplexity: [],
-      fileComplexity: {
-        totalCyclomaticComplexity: cyclomaticComplexity,
-        totalCognitiveComplexity: cyclomaticComplexity,
-        averageFunctionComplexity: cyclomaticComplexity,
-        maxFunctionComplexity: cyclomaticComplexity,
-        maxNestingDepth: maxNesting,
-        maintainabilityIndex: this.calculateMaintainabilityIndex(lines.length, cyclomaticComplexity)
-      }
-    };
-  }
-
-  /**
-   * Initialize language-specific keywords and node types
+   * Initialize language-specific keywords
    */
   private initializeLanguageKeywords(): Map<Language, ComplexityKeywords> {
     const keywords = new Map<Language, ComplexityKeywords>();
-    
+
     // TypeScript/JavaScript
-    keywords.set('typescript', {
-      functionTypes: ['function_declaration', 'method_definition', 'arrow_function'],
-      classTypes: ['class_declaration'],
-      methodTypes: ['method_definition'],
-      propertyTypes: ['property_definition', 'field_definition'],
-      decisionNodes: ['if_statement', 'switch_statement', 'conditional_expression'],
-      controlFlowNodes: ['for_statement', 'while_statement', 'for_in_statement', 'for_of_statement'],
-      nestingNodes: ['if_statement', 'for_statement', 'while_statement', 'try_statement', 'switch_statement'],
-      logicalOperators: ['&&', '||', '??'],
-      exceptionNodes: ['catch_clause', 'throw_statement']
-    });
-    
-    keywords.set('javascript', keywords.get('typescript')!);
-    
+    const jsKeywords: ComplexityKeywords = {
+      functionKeywords: ['function', 'async function'],
+      classKeywords: ['class'],
+      controlFlowKeywords: ['for', 'while', 'do'],
+      decisionKeywords: ['if', 'else if', 'switch', 'case'],
+      loopKeywords: ['for', 'while', 'do', 'forEach', 'map', 'filter'],
+      exceptionKeywords: ['try', 'catch', 'finally', 'throw'],
+      logicalOperators: ['&&', '||', '??']
+    };
+
+    keywords.set('typescript', jsKeywords);
+    keywords.set('javascript', jsKeywords);
+
     // Python
     keywords.set('python', {
-      functionTypes: ['function_definition'],
-      classTypes: ['class_definition'],
-      methodTypes: ['function_definition'],
-      propertyTypes: ['assignment'],
-      decisionNodes: ['if_statement', 'conditional_expression'],
-      controlFlowNodes: ['for_statement', 'while_statement'],
-      nestingNodes: ['if_statement', 'for_statement', 'while_statement', 'try_statement'],
-      logicalOperators: ['and', 'or'],
-      exceptionNodes: ['except_clause', 'raise_statement']
+      functionKeywords: ['def'],
+      classKeywords: ['class'],
+      controlFlowKeywords: ['for', 'while'],
+      decisionKeywords: ['if', 'elif', 'else'],
+      loopKeywords: ['for', 'while'],
+      exceptionKeywords: ['try', 'except', 'finally', 'raise'],
+      logicalOperators: ['and', 'or', 'not']
     });
-    
+
+    // Go
+    keywords.set('go', {
+      functionKeywords: ['func'],
+      classKeywords: ['type', 'struct'],
+      controlFlowKeywords: ['for', 'range'],
+      decisionKeywords: ['if', 'else', 'switch', 'case'],
+      loopKeywords: ['for', 'range'],
+      exceptionKeywords: ['defer', 'panic', 'recover'],
+      logicalOperators: ['&&', '||', '!']
+    });
+
+    // Java
+    keywords.set('java', {
+      functionKeywords: ['public', 'private', 'protected', 'static'],
+      classKeywords: ['class', 'interface'],
+      controlFlowKeywords: ['for', 'while', 'do'],
+      decisionKeywords: ['if', 'else', 'switch', 'case'],
+      loopKeywords: ['for', 'while', 'do', 'foreach'],
+      exceptionKeywords: ['try', 'catch', 'finally', 'throw', 'throws'],
+      logicalOperators: ['&&', '||', '!']
+    });
+
     return keywords;
   }
-}
-
-interface ComplexityKeywords {
-  functionTypes: string[];
-  classTypes: string[];
-  methodTypes: string[];
-  propertyTypes: string[];
-  decisionNodes: string[];
-  controlFlowNodes: string[];
-  nestingNodes: string[];
-  logicalOperators: string[];
-  exceptionNodes: string[];
 }
 
 // Export singleton instance

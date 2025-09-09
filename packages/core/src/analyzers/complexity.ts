@@ -1,7 +1,7 @@
 // packages/core/src/analyzers/complexity.ts
 
 import { Language } from '@github-ai/shared';
-import { ASTNode, astParser } from '../parsers/ast-parser';
+import { ASTNode, ASTParser } from '../parsers/ast-parser';
 
 export interface ComplexityResult {
   cyclomaticComplexity: number;
@@ -47,9 +47,11 @@ export interface FileComplexity {
 
 export class ComplexityAnalyzer {
   private languageKeywords: Map<Language, ComplexityKeywords>;
+  private astParser: ASTParser; 
 
   constructor() {
     this.languageKeywords = this.initializeLanguageKeywords();
+    this.astParser = new ASTParser();
   }
 
   /**
@@ -57,8 +59,8 @@ export class ComplexityAnalyzer {
    */
   async analyzeComplexity(code: string, language: Language): Promise<ComplexityResult> {
     // Parse the code into AST
-    const parseResult = await astParser.parseCode(code, language);
-    
+    const parseResult = await this.astParser.parseCode(code, language);
+
     if (!parseResult.success || !parseResult.ast) {
       // Fallback to basic text-based analysis
       return this.fallbackTextAnalysis(code, language);
